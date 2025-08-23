@@ -64,6 +64,9 @@ server.get('/spools/:id', async (req: any) => prisma.spool.findUnique({ where: {
 server.patch('/spools/:id', async (req: any) =>
   prisma.spool.update({ where: { id: req.params.id }, data: req.body })
 );
+server.delete('/spools/:id', async (req: any) =>
+  prisma.spool.delete({ where: { id: req.params.id } })
+);
 server.post('/spools/:id/events', async (req: any) => {
   const { type, grams, location } = req.body ?? {};
   const id = req.params.id as string;
