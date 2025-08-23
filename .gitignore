@@ -1,0 +1,16 @@
+node_modules
+.next
+.turbo
+.vercel
+.env
+.env.local
+dist
+build
+coverage
+.DS_Store
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+postgres-data
+prisma/dev.db*
+

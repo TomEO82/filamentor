@@ -1,0 +1,317 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  SALES
+}
+
+enum SpoolStatus {
+  IN_STORAGE
+  IN_USE
+  RESERVED
+  QUARANTINE
+  SCRAP
+}
+
+enum JobStatus {
+  INQUIRY
+  QUOTED
+  APPROVED
+  QUEUED
+  PRINTING
+  DONE
+}
+
+enum Severity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+enum AlertCategory {
+  INVENTORY
+  PRINTER
+  JOB
+  MAINTENANCE
+  BILLING
+  REQUEST
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  ORDERED
+  RECEIVED
+  STOCKED
+  CLOSED
+  REJECTED
+  ON_HOLD
+  PARTIAL
+  BACKORDERED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  passwordHash String
+  name      String?
+  role      Role     @default(OPERATOR)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  subscriptions Subscription[]
+  requests    Request[]
+  auditLogs   AuditLog[] @relation("UserAuditLogs")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  contact   String?
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  jobs      Job[]
+}
+
+model Material { // catalog entry per brand/series/color/diameter
+  id        String  @id @default(cuid())
+  name      String  // e.g., "PLA - eSun - Black"
+  brand     String?
+  series    String?
+  color     String? // human name
+  hex       String? // #RRGGBB
+  diameter  String  // "1.75" or "2.85"
+  costPerKg Int     // in agorot/cents; avoid floats
+  sku       String?
+  createdAt DateTime @default(now())
+  spools    Spool[]
+  restockPolicies RestockPolicy[]
+  productMaterials ProductMaterial[]
+}
+
+model Spool {
+  id          String      @id @default(cuid())
+  materialId  String
+  material    Material    @relation(fields: [materialId], references: [id])
+  lot         String?
+  tareG       Int         // grams
+  netG        Int?        // nominal net
+  remainingG  Int         // current remaining
+  status      SpoolStatus @default(IN_STORAGE)
+  location    String?
+  color       String?
+  sig         String?     // HMAC signature for QR
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  links       JobSpoolLink[]
+}
+
+model Printer {
+  id        String   @id @default(cuid())
+  name      String
+  model     String?
+  volume    String? // e.g., 256x256x256
+  nozzle    String? // type/diameter
+  slots     Int?    // AMS/MMU slots
+  hourlyRate Int?   // in agorot/cents
+  createdAt DateTime @default(now())
+}
+
+model Product { // printable SKU/template
+  id        String   @id @default(cuid())
+  name      String
+  defaults  Json?
+  createdAt DateTime @default(now())
+  jobItems  JobItem[]
+  materials ProductMaterial[]
+}
+
+model ProductMaterial {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+  gramsPerUnit Int
+}
+
+enum InventoryCategory {
+  PRINTER
+  PRINTER_SPARE
+  PACKAGING
+  GENERAL
+}
+
+model InventoryItem {
+  id        String   @id @default(cuid())
+  category  InventoryCategory
+  name      String
+  qty       Int      @default(0)
+  unit      String?  // pcs, rolls, etc.
+  location  String?
+  createdAt DateTime @default(now())
+}
+
+model Job {
+  id         String    @id @default(cuid())
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  title      String
+  status     JobStatus @default(INQUIRY)
+  dueAt      DateTime?
+  priority   Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  items      JobItem[]
+  attachments Attachment[]
+}
+
+model JobItem {
+  id            String  @id @default(cuid())
+  jobId         String
+  job           Job     @relation(fields: [jobId], references: [id])
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id])
+  qty           Int      @default(1)
+  materialId    String?
+  color         String?
+  gramsPlanned  Int? // from slicer
+  secondsPlanned Int?
+  links         JobSpoolLink[]
+}
+
+model JobSpoolLink { // reservations/usage by spool per job item
+  id         String @id @default(cuid())
+  jobItemId  String
+  jobItem    JobItem @relation(fields: [jobItemId], references: [id])
+  spoolId    String
+  spool      Spool @relation(fields: [spoolId], references: [id])
+  reservedG  Int
+  usedG      Int @default(0)
+}
+
+model Notification {
+  id         String       @id @default(cuid())
+  category   AlertCategory
+  severity   Severity
+  sourceType String
+  sourceId   String
+  dedupeKey  String?
+  title      String
+  body       String?
+  status     String       @default("OPEN") // OPEN/ACK/MUTED/RESOLVED
+  assigneeId String?
+  createdAt  DateTime     @default(now())
+  resolvedAt DateTime?
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  category    AlertCategory
+  severityMin Severity @default(INFO)
+  channels    Json     // ["inapp","email","push"]
+}
+
+model Request {
+  id            String   @id @default(cuid())
+  type          String   // RESTOCK/CONSUMABLE/PART/EQUIPMENT/SERVICE
+  requesterId   String
+  requester     User     @relation(fields: [requesterId], references: [id])
+  priority      Int      @default(0)
+  status        RequestStatus @default(DRAFT)
+  justification String?
+  budgetCode    String?
+  linkedAlertId String?
+  createdAt     DateTime @default(now())
+  items         RequestItem[]
+  purchaseOrders PurchaseOrder[]
+}
+
+model RequestItem {
+  id            String  @id @default(cuid())
+  requestId     String
+  request       Request @relation(fields: [requestId], references: [id])
+  itemId        String?
+  desc          String
+  qty           Int
+  unit          String? // pcs, kg, etc.
+  targetLocation String?
+}
+
+model Vendor {
+  id           String @id @default(cuid())
+  name         String
+  contact      String?
+  leadTimeDays Int? 
+  purchaseOrders PurchaseOrder[]
+}
+
+model PurchaseOrder {
+  id         String   @id @default(cuid())
+  vendorId   String
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+  requestId  String?
+  request    Request? @relation(fields: [requestId], references: [id])
+  status     String   @default("ORDERED")
+  orderedAt  DateTime @default(now())
+  expectedAt DateTime?
+  currency   String   @default("ILS")
+  items      POItem[]
+}
+
+model POItem {
+  id          String  @id @default(cuid())
+  poId        String
+  po          PurchaseOrder @relation(fields: [poId], references: [id])
+  itemId      String?
+  desc        String
+  qty         Int
+  unitPrice   Int // in agorot/cents
+  receivedQty Int @default(0)
+}
+
+model RestockPolicy {
+  id               String  @id @default(cuid())
+  materialId       String
+  material         Material @relation(fields: [materialId], references: [id])
+  color            String?
+  reorderPointG    Int     @default(0)
+  reorderQtyG      Int?
+  parLevelG        Int?
+  preferredVendorId String?
+  leadTimeDays     Int?    @default(0)
+  safetyStockG     Int?    @default(0)
+}
+
+model Attachment {
+  id        String  @id @default(cuid())
+  jobId     String?
+  job       Job?    @relation(fields: [jobId], references: [id])
+  url       String
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String  @id @default(cuid())
+  actorId   String?
+  actor     User?   @relation("UserAuditLogs", fields: [actorId], references: [id])
+  entity    String
+  entityId  String
+  action    String
+  diff      Json?
+  createdAt DateTime @default(now())
+}
+
