@@ -1,6 +1,0 @@
-node_modules
-.next/cache
-.next/static
-npm-debug.log*
-.env*
-
